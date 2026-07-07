@@ -62,11 +62,80 @@
   --shadow-card: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 24px -12px rgba(0,0,0,0.7);
   --shadow-pop:  0 18px 50px -12px rgba(0,0,0,0.75), 0 0 0 1px rgba(255,255,255,0.05);
 
+  /* Theme-swappable surface helpers */
+  --glass: rgba(10,12,15,0.72);
+  --scroll-thumb: rgba(255,255,255,0.08);
+  --scroll-thumb-hover: rgba(255,255,255,0.16);
+  --app-frame: var(--accent-line);
+
   /* Layout */
   --sidebar-w: 244px;
   --rail-w: 360px;
   --topbar-h: 60px;
 }
+
+/* ============================================================
+   LIGHT THEME
+   ============================================================ */
+:root[data-theme="light"] {
+  --bg-base:        #EEF1F6;
+  --bg-canvas:      #F4F6FA;
+  --bg-panel:       #FFFFFF;
+  --bg-elevated:    #F3F5F9;
+  --bg-hover:       #EDF0F6;
+  --bg-input:       #F6F8FB;
+
+  --border-subtle:  rgba(15,23,42,0.08);
+  --border-soft:    rgba(15,23,42,0.12);
+  --border-strong:  rgba(15,23,42,0.20);
+
+  --text-hi:        #0F141C;
+  --text-mid:       #47505E;
+  --text-lo:        #6B7480;
+  --text-faint:     #9AA2AE;
+
+  --accent:         #5b62f5;
+  --accent-dim:     #4550e6;
+  --accent-soft:    rgba(91,98,245,0.10);
+  --accent-line:    rgba(91,98,245,0.28);
+  --accent-glow:    rgba(91,98,245,0.40);
+
+  --pos:            #0FA968;
+  --pos-soft:       rgba(15,169,104,0.12);
+  --neg:            #E0483F;
+  --neg-soft:       rgba(224,72,63,0.12);
+  --warn:           #C77B14;
+  --warn-soft:      rgba(199,123,20,0.12);
+  --info:           #2f6fe0;
+  --info-soft:      rgba(47,111,224,0.12);
+  --violet:         #7C5CE6;
+  --violet-soft:    rgba(124,92,230,0.12);
+
+  --risk-low:       #0FA968;
+  --risk-mid:       #C77B14;
+  --risk-high:      #E0483F;
+
+  --shadow-card: 0 1px 2px rgba(15,23,42,0.04), 0 10px 28px -18px rgba(15,23,42,0.28);
+  --shadow-pop:  0 18px 50px -14px rgba(15,23,42,0.22), 0 0 0 1px rgba(15,23,42,0.06);
+
+  --glass: rgba(255,255,255,0.78);
+  --scroll-thumb: rgba(15,23,42,0.16);
+  --scroll-thumb-hover: rgba(15,23,42,0.28);
+}
+/* Softer page wash + frame in light mode */
+:root[data-theme="light"] body {
+  background:
+    radial-gradient(1200px 700px at 80% -10%, rgba(91,98,245,0.07), transparent 60%),
+    radial-gradient(900px 600px at 0% 10%, rgba(47,111,224,0.05), transparent 55%),
+    var(--bg-base);
+}
+:root[data-theme="light"] .app { box-shadow: 0 0 60px -24px rgba(91,98,245,0.35); }
+:root[data-theme="light"] .sidebar { background: linear-gradient(180deg, #FFFFFF, var(--bg-canvas)); }
+
+/* Dash tri-panel row */
+.dash-tri { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }
+.dash-tri > * { min-width: 0; }
+@media (max-width: 1200px) { .dash-tri { grid-template-columns: 1fr; } }
 
 /* ---------- Reset ---------- */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -88,8 +157,8 @@ body {
 
 /* Scrollbars */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
-::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.16); background-clip: content-box; }
+::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 8px; border: 2px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* Default sizing for inline label icons (never affects sparklines/donuts, which carry their own class or width attrs) */
@@ -171,7 +240,7 @@ body {
   height: var(--topbar-h); flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
   display: flex; align-items: center; gap: 16px; padding: 0 22px;
-  background: rgba(10,12,15,0.72); backdrop-filter: blur(14px);
+  background: var(--glass); backdrop-filter: blur(14px);
 }
 .breadcrumb { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-lo); }
 .breadcrumb b { color: var(--text-hi); font-weight: 600; }
@@ -215,6 +284,8 @@ body {
 
 /* Layout with right rail */
 .with-rail { display: grid; grid-template-columns: 1fr var(--rail-w); gap: 22px; align-items: start; }
+.with-rail > * { min-width: 0; } /* prevent wide tables from expanding the column and pushing the rail off-screen */
+.with-rail.align-top { align-items: flex-start; }
 @media (max-width: 1360px) { .with-rail { grid-template-columns: 1fr; } }
 
 /* ============================================================

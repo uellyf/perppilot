@@ -33,6 +33,17 @@ function boot() {
   $('#bell').innerHTML = IC.bell;
   $('#gear').innerHTML = IC.settings;
 
+  // Theme (light / dark) — persisted, defaults to system preference
+  const applyTheme = (t) => {
+    document.documentElement.setAttribute('data-theme', t);
+    localStorage.setItem('pp-theme', t);
+    $('#themeBtn').innerHTML = t === 'light' ? IC.moon : IC.sun;
+  };
+  // Brand default is the dark terminal; honour a saved preference if the user has toggled.
+  applyTheme(localStorage.getItem('pp-theme') || 'dark');
+  $('#themeBtn').addEventListener('click', () =>
+    applyTheme(document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'));
+
   const build = (arr, mount) => {
     const nav = $(mount);
     arr.forEach(item => {
@@ -287,7 +298,7 @@ SCREENS.dashboard = (view) => {
     <td>${({hold:recDot('hold','Hold'),trim:recDot('reduce','Take profit'),reduce:recDot('close','Reduce'),margin:recDot('add','Add margin')})[pos.rec]}</td>
   </tr>`).join('');
 
-  const table = `<div class="card" style="margin-top:22px">
+  const table = `<div class="card">
     <div class="card-head">
       <h3>${IC.position} Active Positions <span class="sub">6 open · $407.2K notional</span></h3>
       <div class="chips"><span class="chip active">All</span><span class="chip">Long</span><span class="chip">Short</span><span class="chip">At risk</span></div>
@@ -324,39 +335,41 @@ SCREENS.dashboard = (view) => {
     '__default': 'I can explain your risk, funding, liquidation distances, or any position. Try “Why is my risk increasing?” or “Which position is closest to liquidation?”'
   };
 
-  const rail = `<div class="rail">
-    <div class="ai-panel">
-      <div class="ai-head"><div class="ai-orb">${IC.chat}</div><div><h3>Ask PerpPilot</h3><div class="sub">Grounded in your live positions</div></div></div>
-      <div class="card-pad">${askAI('dash', 'Why is my risk increasing?', ['Why is my risk increasing?','What am I paying in funding?','Closest to liquidation?'], dashAnswers)}</div>
+  const askPanel = `<div class="ai-panel mb-22">
+    <div class="ai-head"><div class="ai-orb">${IC.chat}</div><div><h3>Ask PerpPilot</h3><div class="sub">Grounded in your live positions — ask anything about your book</div></div></div>
+    <div class="card-pad">${askAI('dash', 'Why is my risk increasing?', ['Why is my risk increasing?','What am I paying in funding?','Closest to liquidation?'], dashAnswers)}</div>
+  </div>`;
+
+  const insightsPanel = `<div class="ai-panel">
+    <div class="ai-head"><div class="ai-orb">${IC.sparkles}</div><div><h3>Today's AI Insights</h3><div class="sub">4 signals · updated 12m ago</div></div></div>
+    ${insights}
+  </div>`;
+
+  const actionsCard = `<div class="card">
+    <div class="card-head"><h3>${IC.wand} Suggested Actions</h3><span class="sub">Ranked by impact</span></div>
+    <div class="card-pad">${actions}
+      <div class="explain" style="margin-top:4px"><div class="ai-orb">${IC.sparkles}</div><p>Applying the top two actions lowers <b>portfolio risk 62 → 38</b> and reduces daily funding drag by <b>~$140</b>.</p></div>
     </div>
-    <div class="ai-panel">
-      <div class="ai-head"><div class="ai-orb">${IC.sparkles}</div><div><h3>Today's AI Insights</h3><div class="sub">4 signals · updated 12m ago</div></div></div>
-      ${insights}
-    </div>
-    <div class="card">
-      <div class="card-head"><h3>${IC.wand} Suggested Actions</h3><span class="sub">Ranked by impact</span></div>
-      <div class="card-pad">${actions}
-        <div class="explain" style="margin-top:4px">
-          <div class="ai-orb">${IC.sparkles}</div>
-          <p>Applying the top two actions lowers <b>portfolio risk 62 → 38</b> and reduces daily funding drag by <b>~$140</b>.</p>
-        </div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-head"><h3>${IC.history} Decision History</h3><span class="sub">AI recall</span></div>
-      <div class="card-pad">${decisionHistory([
-        { day:'Today', rec:'Reduce SOL leverage 12× → 6×', action:'Suggested', followed:'Pending', result:'Open', outcomeTone:'warn' },
-        { day:'Yesterday', rec:'Reduce ETH leverage before funding', action:'Suggested', followed:'Ignored', result:'−$542 funding drag', outcomeTone:'bad' },
-        { day:'2d ago', rec:'Add margin to AVAX', action:'Suggested', followed:'Followed', result:'Avoided liquidation', outcomeTone:'good' },
-        { day:'3d ago', rec:'Take partial profit on BTC', action:'Suggested', followed:'Followed', result:'+$1,240 locked', outcomeTone:'good' },
-      ])}
-        <div class="explain" style="margin-top:8px"><div class="ai-orb">${IC.sparkles}</div><p>You followed <b>2 of 4</b> recommendations this week. The one you ignored (ETH) cost <b>$542</b> in avoidable funding.</p></div>
-      </div>
+  </div>`;
+
+  const decisionCard = `<div class="card">
+    <div class="card-head"><h3>${IC.history} Decision History</h3><span class="sub">AI recall</span></div>
+    <div class="card-pad">${decisionHistory([
+      { day:'Today', rec:'Reduce SOL leverage 12× → 6×', action:'Suggested', followed:'Pending', result:'Open', outcomeTone:'warn' },
+      { day:'Yesterday', rec:'Reduce ETH leverage before funding', action:'Suggested', followed:'Ignored', result:'−$542 funding drag', outcomeTone:'bad' },
+      { day:'2d ago', rec:'Add margin to AVAX', action:'Suggested', followed:'Followed', result:'Avoided liquidation', outcomeTone:'good' },
+      { day:'3d ago', rec:'Take partial profit on BTC', action:'Suggested', followed:'Followed', result:'+$1,240 locked', outcomeTone:'good' },
+    ])}
+      <div class="explain" style="margin-top:8px"><div class="ai-orb">${IC.sparkles}</div><p>You followed <b>2 of 4</b> recommendations this week. The one you ignored (ETH) cost <b>$542</b> in avoidable funding.</p></div>
     </div>
   </div>`;
 
   const pmi = `<div class="mt-16">${pmInsight({ problem:'Traders open the app and see numbers, not a decision — so risk is understood too late.', hypothesis:'Leading with an AI decision-flow (what needs attention + one recommended action) drives faster, safer responses.', metric:'time-to-first-action', metricVal:'−63%' })}</div>`;
-  view.innerHTML = hero + kpis + market + `<div class="with-rail" style="margin-top:6px"><div>${table}</div>${rail}</div>` + pmi;
+
+  view.innerHTML = hero + kpis + market + askPanel
+    + `<div class="mb-22">${table}</div>`
+    + `<div class="dash-tri">${insightsPanel}${actionsCard}${decisionCard}</div>`
+    + pmi;
   startFundingClock();
 };
 
