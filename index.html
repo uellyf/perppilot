@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PerpPilot — Decision support for perpetual traders</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;550;600;650;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+  <div class="app">
+    <!-- ============ Sidebar ============ -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark" id="logo"></div>
+        <div>
+          <div class="brand-name">Perp<b>Pilot</b></div>
+          <div class="brand-badge">Decision Intelligence</div>
+        </div>
+      </div>
+
+      <div class="nav-group-label">Overview</div>
+      <nav id="nav-main"></nav>
+
+      <div class="nav-group-label">Simulators</div>
+      <nav id="nav-sim"></nav>
+
+      <div class="nav-group-label">Reflect</div>
+      <nav id="nav-reflect"></nav>
+
+      <div class="sidebar-foot">
+        <div class="upgrade-card">
+          <h4>PerpPilot Pro</h4>
+          <p>Live oracle feeds, unlimited AI trade plans & journal reviews.</p>
+          <button class="btn btn-primary btn-sm" style="width:100%">Upgrade</button>
+        </div>
+        <div class="user-chip">
+          <div class="avatar">EU</div>
+          <div class="meta">
+            <b>Elif Un</b>
+            <span>Pro trader · 0x8f…3aD1</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ============ Main ============ -->
+    <div class="main">
+      <header class="topbar">
+        <div class="search" id="cmdk" style="width:260px">
+          <span id="search-ic"></span>
+          <input placeholder="Search or ask AI…" />
+          <span class="kbd">⌘K</span>
+        </div>
+        <div class="ticker">
+          <span class="tk"><span class="tk-sym">BTC</span><span class="tk-val pos">$64,231</span></span>
+          <span class="tk"><span class="tk-sym">ETH</span><span class="tk-val pos">$3,421</span></span>
+          <span class="tk"><span class="tk-sym">OI</span><span class="tk-val">$12.4B</span></span>
+        </div>
+        <div class="topbar-right">
+          <span class="ai-active"><span class="live-dot"></span> AI ACTIVE</span>
+          <button class="icon-btn" id="bell"><span class="dot"></span></button>
+          <button class="icon-btn" id="gear"></button>
+        </div>
+      </header>
+
+      <div class="content">
+        <div id="view" class="view"></div>
+      </div>
+
+      <footer class="statusbar">
+        <div class="sb-l">
+          <span><span class="ok">●</span> CONNECTED: <b>MAINNET-RPC-01</b></span>
+          <span>LATENCY: <b>12ms</b></span>
+          <span>ORACLE: <b>Hyperliquid</b></span>
+        </div>
+        <div class="sb-r">
+          <span>BLOCK: <b>18,432,012</b></span>
+          <span>GAS: <b>14 GWEI</b></span>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <script src="assets/js/data.js"></script>
+  <script src="assets/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# Local tooling & OS files
+.claude/
+.DS_Store
+Thumbs.db
+
+# Logs / temp
+*.log
+node_modules/
+.vscode/
+.idea/
