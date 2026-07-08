@@ -61,6 +61,8 @@
         </div>
         <div class="topbar-right">
           <span class="ai-active"><span class="live-dot"></span> AI ACTIVE</span>
+          <span class="live-pill" id="liveBadge" style="cursor:pointer"></span>
+          <button class="btn btn-primary btn-sm" id="connectBtn" style="gap:6px"></button>
           <button class="icon-btn" id="themeBtn" title="Toggle light / dark"></button>
           <button class="icon-btn" id="bell"><span class="dot"></span></button>
           <button class="icon-btn" id="gear"></button>
@@ -82,6 +84,24 @@
           <span>GAS: <b>14 GWEI</b></span>
         </div>
       </footer>
+    </div>
+  </div>
+
+  <!-- Connect wallet (read-only) modal -->
+  <div class="modal-overlay" id="connectModal">
+    <div class="modal">
+      <button class="modal-close" id="connectClose">✕</button>
+      <div class="modal-orb" id="connectOrb"></div>
+      <h3>Connect a Hyperliquid wallet</h3>
+      <p class="modal-sub">PerpPilot reads your <b>real on-chain positions</b> — no API keys, no signatures. It's <b>read-only</b> and can never trade.</p>
+      <label class="modal-label">Wallet address</label>
+      <div class="modal-input"><input id="addrInput" placeholder="0x… paste your Hyperliquid address" spellcheck="false" autocomplete="off"></div>
+      <div class="modal-err" id="connectErr"></div>
+      <button class="btn btn-primary" id="connectSubmit" style="width:100%;margin-top:6px"></button>
+      <div class="modal-foot">
+        <span>Pulls live from <b>api.hyperliquid.xyz</b> · positions, funding, liquidation</span>
+        <button class="modal-link" id="useDemoBtn">Continue with demo data →</button>
+      </div>
     </div>
   </div>
 

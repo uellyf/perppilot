@@ -56,7 +56,14 @@ function boot() {
   build(NAV.sim, '#nav-sim');
   build(NAV.reflect, '#nav-reflect');
 
+  wireConnect();
+  updateLiveBadge();
+
   go('dashboard');
+
+  // Auto-reconnect a previously linked wallet (falls back to demo on failure)
+  const saved = localStorage.getItem('pp-hl-addr');
+  if (saved) connectWallet(saved, { silent: true }).catch(() => { CONNECTED_ADDR = null; updateLiveBadge(); });
 }
 
 function go(route) {
@@ -70,6 +77,71 @@ function go(route) {
 }
 
 const SCREENS = {};
+
+/* ============================================================
+   Read-only wallet connection (Hyperliquid, on-chain)
+   ============================================================ */
+let CONNECTED_ADDR = null;
+
+function updateLiveBadge() {
+  const badge = $('#liveBadge'), btn = $('#connectBtn');
+  if (!badge || !btn) return;
+  if (CONNECTED_ADDR) {
+    badge.className = 'live-pill live-on';
+    badge.innerHTML = `<span class="live-dot" style="background:var(--pos)"></span> LIVE · ${CONNECTED_ADDR.slice(0,6)}…${CONNECTED_ADDR.slice(-4)}`;
+    btn.innerHTML = `${IC.x} Disconnect`;
+    btn.classList.remove('btn-primary'); btn.classList.add('btn-ghost');
+  } else {
+    badge.className = 'live-pill demo';
+    badge.innerHTML = `DEMO DATA`;
+    btn.innerHTML = `${IC.wallet} Connect wallet`;
+    btn.classList.add('btn-primary'); btn.classList.remove('btn-ghost');
+  }
+}
+
+function applyData(d) { PORTFOLIO = d.portfolio; POSITIONS = d.positions; MARKET = d.market; }
+
+function useDemo() {
+  CONNECTED_ADDR = null; localStorage.removeItem('pp-hl-addr');
+  applyData({ portfolio: DEMO_PORTFOLIO, positions: DEMO_POSITIONS, market: DEMO_MARKET });
+  updateLiveBadge(); go('dashboard');
+}
+
+async function connectWallet(address, opts = {}) {
+  let addr = (address || '').trim();
+  if (!addr.startsWith('0x')) addr = '0x' + addr;
+  if (!/^0x[a-fA-F0-9]{40}$/.test(addr)) throw new Error('Enter a valid 0x… wallet address (42 chars).');
+  const res = await fetchHL(addr);
+  if (res.empty) throw new Error(`Connected, but this address has no open Hyperliquid positions right now (account value ${fmtUSD(res.accountValue, 0)}). Try an address with active perps.`);
+  applyData(res);
+  CONNECTED_ADDR = addr; localStorage.setItem('pp-hl-addr', addr);
+  updateLiveBadge();
+  if (!opts.silent) closeConnect();
+  go('dashboard');
+}
+
+function openConnect() { $('#connectModal').classList.add('open'); setTimeout(() => $('#addrInput')?.focus(), 60); }
+function closeConnect() { $('#connectModal').classList.remove('open'); }
+
+function wireConnect() {
+  $('#connectOrb').innerHTML = IC.wallet;
+  const toggle = () => { if (CONNECTED_ADDR) useDemo(); else openConnect(); };
+  $('#connectBtn')?.addEventListener('click', toggle);
+  $('#liveBadge')?.addEventListener('click', () => { if (CONNECTED_ADDR) useDemo(); else openConnect(); });
+  $('#connectClose')?.addEventListener('click', closeConnect);
+  $('#connectModal')?.addEventListener('click', e => { if (e.target.id === 'connectModal') closeConnect(); });
+  $('#useDemoBtn')?.addEventListener('click', () => { closeConnect(); useDemo(); });
+  const submit = async () => {
+    const err = $('#connectErr'), btn = $('#connectSubmit');
+    err.textContent = ''; btn.disabled = true; btn.textContent = 'Connecting…';
+    try { await connectWallet($('#addrInput').value); }
+    catch (e) { err.textContent = e.message; }
+    finally { btn.disabled = false; btn.innerHTML = `${IC.wallet} Connect read-only`; }
+  };
+  $('#connectSubmit').innerHTML = `${IC.wallet} Connect read-only`;
+  $('#connectSubmit')?.addEventListener('click', submit);
+  $('#addrInput')?.addEventListener('keydown', e => { if (e.key === 'Enter') submit(); });
+}
 
 /* ============================================================
    Small render helpers
@@ -205,23 +277,40 @@ function semiGauge(pct, label, color, size = 190, id = '') {
    ============================================================ */
 SCREENS.dashboard = (view) => {
   const p = PORTFOLIO, m = MARKET;
+  const isLive = !!(typeof CONNECTED_ADDR !== 'undefined' && CONNECTED_ADDR);
+  const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+  const nLong = POSITIONS.filter(x => x.dir === 'long').length, nShort = POSITIONS.length - nLong;
+  const totalNotional = POSITIONS.reduce((s, x) => s + x.size, 0);
+  const attention = POSITIONS.filter(x => x.risk >= 62);
+  const sorted = [...POSITIONS].sort((a, b) => b.risk - a.risk);
+  const topRisk = sorted[0] || {};
+  const topDist = topRisk.mark ? Math.abs(topRisk.mark - topRisk.liq) / topRisk.mark * 100 : 0;
+  const fundingSum = POSITIONS.reduce((s, x) => s + (x.funding || 0), 0);
+  const nearest = POSITIONS.filter(x => x.hasLiq !== false).sort((a, b) =>
+    Math.abs(a.mark - a.liq) / a.mark - Math.abs(b.mark - b.liq) / b.mark)[0] || topRisk;
+  const nearestDist = nearest.mark ? Math.abs(nearest.mark - nearest.liq) / nearest.mark * 100 : 0;
+  const fundPct = (v) => (v >= 0 ? '+' : '') + (+v).toFixed(4) + '%';
+
+  const rec = topRisk.risk >= 62
+    ? `Reduce <b>${topRisk.sym}</b> — it's your highest-risk position (score <b>${topRisk.risk}</b>, ${topDist.toFixed(1)}% to liquidation).`
+    : `No urgent action — your highest risk is <b>${topRisk.sym||'—'}</b> at <b>${topRisk.risk||0}</b> (low). Watching funding and liquidation buffers.`;
 
   const hero = `<div class="hero"><div class="hero-grid">
     <div>
-      <div class="eyebrow">${IC.sparkles}<span>AI Morning Briefing · ${new Date().toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'})}</span></div>
-      <h1>Good morning, Elif.</h1>
+      <div class="eyebrow">${IC.sparkles}<span>${isLive ? 'Live wallet analysis' : 'AI Morning Briefing'} · ${new Date().toLocaleDateString('en-US',{weekday:'long', month:'short', day:'numeric'})}</span></div>
+      <h1>${isLive ? 'Connected to Hyperliquid.' : 'Good morning, Elif.'}</h1>
       <div class="flow">
-        <div class="flow-step"><div class="fs-lbl">AI analyzed</div><div class="fs-val">6 positions</div><div class="fs-sub">$407.2K notional</div></div>
-        <div class="flow-step"><div class="fs-lbl">Require attention</div><div class="fs-val" style="color:var(--warn)">2 positions</div><div class="fs-sub">SOL · AVAX</div></div>
-        <div class="flow-step"><div class="fs-lbl">Funding today</div><div class="fs-val neg">−$84.20</div><div class="fs-sub">est. net carry</div></div>
-        <div class="flow-step"><div class="fs-lbl">Highest risk</div><div class="fs-val" style="color:var(--neg)">SOL Long</div><div class="fs-sub">risk 84 · 4.9% to liq</div></div>
+        <div class="flow-step"><div class="fs-lbl">AI analyzed</div><div class="fs-val">${POSITIONS.length} position${POSITIONS.length===1?'':'s'}</div><div class="fs-sub">$${fmtCompact(totalNotional)} notional</div></div>
+        <div class="flow-step"><div class="fs-lbl">Require attention</div><div class="fs-val" style="color:${attention.length?'var(--warn)':'var(--pos)'}">${attention.length} position${attention.length===1?'':'s'}</div><div class="fs-sub">${attention.length ? attention.slice(0,3).map(x=>x.sym).join(' · ') : 'all within buffer'}</div></div>
+        <div class="flow-step"><div class="fs-lbl">Funding ${isLive?'accrued':'today'}</div><div class="fs-val ${fundingSum>=0?'pos':'neg'}">${fmtSigned(fundingSum,0)}</div><div class="fs-sub">${isLive?'since open':'est. net carry'}</div></div>
+        <div class="flow-step"><div class="fs-lbl">Highest risk</div><div class="fs-val" style="color:${riskColor(topRisk.risk||0)}">${topRisk.sym||'—'} ${topRisk.dir?cap(topRisk.dir):''}</div><div class="fs-sub">risk ${topRisk.risk||0} · ${topDist.toFixed(1)}% to liq</div></div>
       </div>
       <div class="flow-cta" style="margin-top:18px">
         <span class="ai-orb">${IC.wand}</span>
         <div style="flex:1">
           <div style="font-weight:600;font-size:13.5px;margin-bottom:2px">Recommended action</div>
-          <div style="font-size:12.5px;color:var(--text-mid)">Reduce <b>SOL</b> leverage <b>12× → 6×</b> before the next funding settles in <b id="heroClock" class="mono">00:42:00</b>.</div>
-          <div style="max-width:210px;margin-top:8px">${confBar(93)}</div>
+          <div style="font-size:12.5px;color:var(--text-mid)">${rec} Next funding settles in <b id="heroClock" class="mono">00:42:00</b>.</div>
+          <div style="max-width:210px;margin-top:8px">${confBar(isLive?86:93)}</div>
         </div>
         <div class="hero-actions" style="flex-direction:column;gap:8px">
           <button class="btn btn-primary" onclick="go('position')">${IC.gauge} Review Risk</button>
@@ -240,9 +329,9 @@ SCREENS.dashboard = (view) => {
     ${kpiCard({ label:"Today's PnL", ic:'activity', val:fmtSigned(p.todayPnl), delta:'vs. yesterday', deltaTone:'muted', spark:S(2,1.4,24,true), sparkColor:'var(--pos)' })}
     ${kpiCard({ label:'Unrealized PnL', ic:'pnl', val:fmtSigned(p.unrealized), delta:fmtPct(p.unrealizedPct), deltaTone:'pos', spark:S(8,2,24,true), sparkColor:'var(--pos)' })}
     ${kpiCard({ label:'Total Funding Paid', ic:'funding', val:fmtSigned(p.fundingPaid), delta:'30-day', deltaTone:'muted', spark:S(-1,0.5,24,false), sparkColor:'var(--neg)' })}
-    ${kpiCard({ label:'Open Positions', ic:'layers', val:String(p.openPositions), delta:'4 long · 2 short', deltaTone:'muted', foot:`<span class="badge badge-neutral">3 markets hot</span>` })}
-    ${kpiCard({ label:'Average Leverage', ic:'gauge', val:p.avgLeverage.toFixed(1)+'×', delta:'target ≤ 6×', deltaTone:'warn', foot:`<span class="badge badge-warn">${IC.alert} Above target</span>` })}
-    ${kpiCard({ label:'Liquidation Distance', ic:'shield', val:p.liqDistance.toFixed(1)+'%', delta:'nearest: SOL 4.9%', deltaTone:'neg', foot:`<span class="badge badge-neg">Tight</span>` })}
+    ${kpiCard({ label:'Open Positions', ic:'layers', val:String(p.openPositions), delta:`${nLong} long · ${nShort} short`, deltaTone:'muted', foot:`<span class="badge badge-neutral">${POSITIONS.length} markets</span>` })}
+    ${kpiCard({ label:'Average Leverage', ic:'gauge', val:p.avgLeverage.toFixed(1)+'×', delta:'target ≤ 6×', deltaTone: p.avgLeverage>6?'warn':'muted', foot: p.avgLeverage>6?`<span class="badge badge-warn">${IC.alert} Above target</span>`:`<span class="badge badge-pos">${IC.check} Within target</span>` })}
+    ${kpiCard({ label:'Liquidation Distance', ic:'shield', val:p.liqDistance.toFixed(1)+'%', delta:`nearest: ${nearest.sym||'—'} ${nearestDist.toFixed(1)}%`, deltaTone: p.liqDistance<8?'neg':'muted', foot: p.liqDistance<8?`<span class="badge badge-neg">Tight</span>`:`<span class="badge badge-pos">Safe</span>` })}
     ${kpiCard({ label:'Overall Risk Score', ic:'target', val:String(p.riskScore), delta:riskLabel(p.riskScore), deltaTone:'warn', foot:`<div class="riskbar" style="width:88px"><i style="width:${p.riskScore}%;background:${riskColor(p.riskScore)}"></i></div>` })}
   </div>`;
 
@@ -250,13 +339,13 @@ SCREENS.dashboard = (view) => {
   <div class="market-strip">
     <div class="market-cell">
       <div class="mc-label">${IC.funding} BTC Funding</div>
-      <div class="mc-val pos">+0.0182%</div>
-      <div class="mc-sub badge badge-warn" style="margin-top:6px">3-week high</div>
+      <div class="mc-val ${m.btcFunding>=0?'pos':'neg'}">${fundPct(m.btcFunding)}</div>
+      ${isLive?`<div class="mc-sub muted">per hour · live</div>`:`<div class="mc-sub badge badge-warn" style="margin-top:6px">3-week high</div>`}
     </div>
     <div class="market-cell">
       <div class="mc-label">${IC.funding} ETH Funding</div>
-      <div class="mc-val pos">+0.0119%</div>
-      <div class="mc-sub muted">0.036% / 8h</div>
+      <div class="mc-val ${m.ethFunding>=0?'pos':'neg'}">${fundPct(m.ethFunding)}</div>
+      <div class="mc-sub muted">${isLive?'per hour · live':'0.036% / 8h'}</div>
     </div>
     <div class="market-cell">
       <div class="mc-label">${IC.layers} Open Interest</div>
@@ -300,7 +389,7 @@ SCREENS.dashboard = (view) => {
 
   const table = `<div class="card">
     <div class="card-head">
-      <h3>${IC.position} Active Positions <span class="sub">6 open · $407.2K notional</span></h3>
+      <h3>${IC.position} Active Positions <span class="sub">${POSITIONS.length} open · $${fmtCompact(totalNotional)} notional${isLive?' · live':''}</span></h3>
       <div class="chips"><span class="chip active">All</span><span class="chip">Long</span><span class="chip">Short</span><span class="chip">At risk</span></div>
     </div>
     <div class="table-wrap"><table class="grid">

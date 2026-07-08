@@ -103,7 +103,7 @@ const S = (base, vol, n = 24, up = true) => {
 /* ============================================================
    Mock portfolio / market data
    ============================================================ */
-const PORTFOLIO = {
+let PORTFOLIO = {
   value: 248910.44,
   todayPnl: 4820.19, todayPnlPct: 1.98,
   unrealized: 12408.60, unrealizedPct: 5.24,
@@ -114,7 +114,7 @@ const PORTFOLIO = {
   riskScore: 62,
 };
 
-const MARKET = {
+let MARKET = {
   btcFunding: 0.0182, btcFundingTrend: 'up',
   ethFunding: 0.0119,
   openInterest: 41.28e9, oiChange: 6.4,
@@ -123,7 +123,7 @@ const MARKET = {
   nextFundingMin: 42,
 };
 
-const POSITIONS = [
+let POSITIONS = [
   { id:'btc', sym:'BTC', name:'Bitcoin Perp', cls:'coin-btc', dir:'long', lev:5, entry:61240, mark:63910, size:184200, pnl:8032.40, pnlPct:4.36, funding:-642.10, liq:52180, risk:38, rec:'hold', recTxt:'Hold', margin:36840, mmr:0.5, index:63888, sparkUp:true },
   { id:'eth', sym:'ETH', name:'Ethereum Perp', cls:'coin-eth', dir:'long', lev:8, entry:2985, mark:3122, size:96400, pnl:4420.10, pnlPct:4.59, funding:-388.40, liq:2712, risk:52, rec:'trim', recTxt:'Take profit', margin:12050, mmr:0.5, index:3120, sparkUp:true },
   { id:'sol', sym:'SOL', name:'Solana Perp', cls:'coin-sol', dir:'long', lev:12, entry:172.40, mark:158.90, size:58200, pnl:-4552.30, pnlPct:-7.83, funding:-512.80, liq:151.20, risk:84, rec:'reduce', recTxt:'Reduce risk', margin:4850, mmr:0.5, index:159.10, sparkUp:false },
@@ -131,6 +131,76 @@ const POSITIONS = [
   { id:'avax', sym:'AVAX', name:'Avalanche Perp', cls:'coin-avax', dir:'long', lev:10, entry:38.20, mark:36.85, size:22400, pnl:-822.40, pnlPct:-3.53, funding:-96.20, liq:34.90, risk:68, rec:'margin', recTxt:'Add margin', margin:2240, mmr:0.6, index:36.90, sparkUp:false },
   { id:'doge', sym:'DOGE', name:'Dogecoin Perp', cls:'coin-doge', dir:'short', lev:7, entry:0.1642, mark:0.1588, size:14800, pnl:486.40, pnlPct:3.29, funding:74.30, liq:0.1848, risk:34, rec:'hold', recTxt:'Hold', margin:2114, mmr:0.6, index:0.1590, sparkUp:false },
 ];
+
+/* ---------- Demo snapshots (to restore after a live session) ---------- */
+const DEMO_PORTFOLIO = PORTFOLIO, DEMO_MARKET = MARKET, DEMO_POSITIONS = POSITIONS;
+
+/* ============================================================
+   LIVE — read-only Hyperliquid connection (no keys, on-chain)
+   ============================================================ */
+const HL_API = 'https://api.hyperliquid.xyz/info';
+const COIN_CLASS = { BTC:'coin-btc', ETH:'coin-eth', SOL:'coin-sol', ARB:'coin-arb', AVAX:'coin-avax', DOGE:'coin-doge' };
+const coinClass = (s) => COIN_CLASS[s] || 'coin-generic';
+
+async function fetchHL(address) {
+  const post = (body) => fetch(HL_API, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
+    .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
+  const [state, metaCtx] = await Promise.all([
+    post({ type:'clearinghouseState', user: address }),
+    post({ type:'metaAndAssetCtxs' }),
+  ]);
+  const meta = metaCtx[0], ctxs = metaCtx[1], ctxByCoin = {};
+  meta.universe.forEach((u, i) => { ctxByCoin[u.name] = ctxs[i]; });
+
+  const aps = state.assetPositions || [];
+  const accountValue = +(state.marginSummary?.accountValue || 0);
+  if (!aps.length) return { empty: true, accountValue };
+
+  const positions = aps.map(ap => {
+    const p = ap.position, coin = p.coin, ctx = ctxByCoin[coin] || {};
+    const szi = +p.szi, dir = szi >= 0 ? 'long' : 'short';
+    const mark = +(ctx.markPx || p.entryPx), index = +(ctx.oraclePx || mark), prev = +(ctx.prevDayPx || mark);
+    const entry = +p.entryPx, size = Math.abs(+p.positionValue), pnl = +p.unrealizedPnl;
+    const lev = p.leverage?.value || 1;
+    const liq = p.liquidationPx != null ? +p.liquidationPx : null;
+    const margin = +p.marginUsed;
+    const roe = +(p.returnOnEquity || 0) * 100;
+    const funding = -(+(p.cumFunding?.sinceOpen || 0));          // positive cumFunding = paid → show negative
+    const dist = liq ? Math.abs(mark - liq) / mark : 1;
+    const risk = Math.round(Math.min(100, Math.max(6, (1 - Math.min(dist, 0.25) / 0.25) * 68 + lev * 0.9)));
+    const rec = risk >= 80 ? 'reduce' : risk >= 62 ? 'trim' : risk >= 50 ? 'margin' : 'hold';
+    const recTxt = { reduce:'Reduce risk', trim:'Take profit', margin:'Add margin', hold:'Hold' }[rec];
+    return { id: coin.toLowerCase(), sym: coin, name: coin + '-PERP', cls: coinClass(coin), dir, lev,
+      entry, mark, size, pnl, pnlPct: roe, funding, liq: liq || mark, hasLiq: liq != null, risk, rec, recTxt, margin, mmr: 0.5, index,
+      sparkUp: pnl >= 0, dayPnl: szi * (mark - prev), lclass: p.leverage?.type || 'cross' };
+  });
+
+  const sum = (f) => positions.reduce((s, p) => s + f(p), 0);
+  const notional = sum(p => p.size) || 1;
+  const unrealized = sum(p => p.pnl);
+  const portfolio = {
+    value: accountValue, todayPnl: sum(p => p.dayPnl),
+    todayPnlPct: accountValue ? sum(p => p.dayPnl) / accountValue * 100 : 0,
+    unrealized, unrealizedPct: (accountValue - unrealized) ? unrealized / (accountValue - unrealized) * 100 : 0,
+    fundingPaid: sum(p => Math.min(0, p.funding)),
+    openPositions: positions.length,
+    avgLeverage: +(sum(p => p.lev * p.size) / notional).toFixed(1),
+    liqDistance: +(Math.min(...positions.filter(p => p.hasLiq).map(p => Math.abs(p.mark - p.liq) / p.mark * 100), 100)).toFixed(1),
+    riskScore: Math.round(sum(p => p.risk * p.size) / notional),
+  };
+
+  const b = ctxByCoin.BTC || {}, e = ctxByCoin.ETH || {};
+  const totalOI = meta.universe.reduce((s, u, i) => s + (+(ctxs[i]?.openInterest || 0)) * (+(ctxs[i]?.markPx || 0)), 0);
+  const market = {
+    btcFunding: +(((+b.funding || 0)) * 100).toFixed(4), btcFundingTrend: 'up',
+    ethFunding: +(((+e.funding || 0)) * 100).toFixed(4),
+    openInterest: totalOI, oiChange: 0,
+    fearGreed: DEMO_MARKET.fearGreed, fearGreedLabel: DEMO_MARKET.fearGreedLabel,
+    longRatio: DEMO_MARKET.longRatio, shortRatio: DEMO_MARKET.shortRatio,
+    nextFundingMin: 60 - new Date().getUTCMinutes(),
+  };
+  return { positions, portfolio, market, accountValue };
+}
 
 const AI_INSIGHTS = [
   { ic:'flame', tone:'warn', title:'BTC funding at 3-week high', body:'<b>BTC funding</b> reached <b>+0.0182%</b> (0.055% / 8h), its highest in three weeks. Longs are paying shorts — holding costs are rising.', t:'12 min ago' },
