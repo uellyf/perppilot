@@ -16,6 +16,8 @@ const NAV = {
     { id:'funding', label:'Funding Lab', ic:'funding', crumb:'Funding Lab' },
     { id:'liquidation', label:'Liquidation Lab', ic:'liquidation', crumb:'Liquidation Lab' },
     { id:'planner', label:'AI Trade Planner', ic:'planner', crumb:'AI Trade Planner' },
+    { id:'arb', label:'Funding Arb', ic:'scale', crumb:'Cross-venue Funding Arb' },
+    { id:'points', label:'Points Lab', ic:'target', crumb:'Points Lab' },
   ],
   reflect: [
     { id:'journal', label:'Trade Journal', ic:'journal', crumb:'Trade Journal' },
@@ -82,6 +84,7 @@ const SCREENS = {};
    Read-only wallet connection (Hyperliquid, on-chain)
    ============================================================ */
 let CONNECTED_ADDR = null;
+let LIVE_FILLS = [];
 
 function updateLiveBadge() {
   const badge = $('#liveBadge'), btn = $('#connectBtn');
@@ -99,7 +102,7 @@ function updateLiveBadge() {
   }
 }
 
-function applyData(d) { PORTFOLIO = d.portfolio; POSITIONS = d.positions; MARKET = d.market; }
+function applyData(d) { PORTFOLIO = d.portfolio; POSITIONS = d.positions; MARKET = d.market; LIVE_FILLS = d.fills || []; }
 
 function useDemo() {
   CONNECTED_ADDR = null; localStorage.removeItem('pp-hl-addr');
@@ -400,48 +403,83 @@ SCREENS.dashboard = (view) => {
     </table></div>
   </div>`;
 
-  /* Right rail */
-  const insights = AI_INSIGHTS.map(i => {
-    const toneMap = { warn:['var(--warn-soft)','var(--warn)'], info:['var(--info-soft)','var(--info)'], neg:['var(--neg-soft)','var(--neg)'], accent:['var(--accent-soft)','var(--accent)'] };
-    const [bg, fg] = toneMap[i.tone];
-    return `<div class="insight">
-      <div class="insight-ic" style="background:${bg};color:${fg}">${IC[i.ic]}</div>
-      <div><p>${i.body}</p><div class="t">${i.t}</div></div>
-    </div>`;
-  }).join('');
+  /* Right rail — live-derived when a wallet is connected */
+  const toneMap = { warn:['var(--warn-soft)','var(--warn)'], info:['var(--info-soft)','var(--info)'], neg:['var(--neg-soft)','var(--neg)'], accent:['var(--accent-soft)','var(--accent)'], pos:['var(--pos-soft)','var(--pos)'] };
+  const timeAgo = (ms) => { const s = (Date.now() - ms) / 1000; return s < 3600 ? Math.max(1,Math.round(s/60))+'m' : s < 86400 ? Math.round(s/3600)+'h' : Math.round(s/86400)+'d'; };
 
-  const actions = SUGGESTED_ACTIONS.map(a => `<div class="action-row">
-    <div class="action-ic">${IC[a.ic]}</div>
-    <div><div class="a-title">${a.title}</div><div class="a-desc">${a.desc}</div></div>
-    <div class="impact"><div class="imp-val" style="color:${a.unit==='cost'?'var(--pos)':a.unit==='realized'?'var(--pos)':'var(--pos)'}">${a.impact}</div><div class="imp-lbl">${a.unit}</div></div>
-  </div>`).join('');
-
-  const dashAnswers = {
-    'risk': 'Your portfolio risk rose <b>54 → 62</b> today. <b>78%</b> of that increase comes from your <b>SOL</b> long: realized volatility jumped to 84% and price is now <b>4.9%</b> from liquidation. Elevated funding on BTC/ETH adds the rest. Reducing SOL leverage 12×→6× would bring the portfolio back to <b>~48</b>.',
-    'funding': 'You are <b>net paying</b> funding today — about <b>−$84</b>. The biggest drains are SOL (−$32) and ETH (−$28), both crowded longs. Your ARB & DOGE shorts <b>earn</b> funding, offsetting ~$18.',
-    'sol': 'SOL is your riskiest position (score <b>84</b>). At 12× leverage the liquidation buffer is only <b>4.9%</b>, and 30-day vol of 84% can erase that in a single session. I recommend reducing leverage to 6× or trimming 40% of size.',
-    'liquid': 'Your nearest liquidation is <b>SOL at $151.20</b> — 4.9% away. AVAX is next at 5.4%. No other position is within 10% of liquidation.',
-    '__default': 'I can explain your risk, funding, liquidation distances, or any position. Try “Why is my risk increasing?” or “Which position is closest to liquidation?”'
+  const liveInsights = () => {
+    const out = [];
+    const wf = [...POSITIONS].sort((a,b)=>a.funding-b.funding)[0];
+    if (wf && wf.funding < 0) out.push({ ic:'funding', tone:'warn', body:`Your <b>${wf.sym}</b> ${wf.dir} has cost the most funding — <b>${fmtSigned(wf.funding,0)}</b> since open.`, t:'live' });
+    if (topRisk.sym) out.push({ ic:'alert', tone: topRisk.risk>=62?'neg':'accent', body:`Highest-risk position: <b>${topRisk.sym}</b> ${topRisk.dir} — risk <b>${topRisk.risk}</b>, ${topDist.toFixed(1)}% from liquidation.`, t:'live' });
+    const win = [...POSITIONS].sort((a,b)=>b.pnl-a.pnl)[0];
+    if (win) out.push({ ic:'trend', tone:'accent', body:`Biggest open gainer: <b>${win.sym}</b> at <b>${fmtSigned(win.pnl,0)}</b> (${fmtPct(win.pnlPct)}).`, t:'live' });
+    const big = [...POSITIONS].sort((a,b)=>b.size-a.size)[0];
+    if (big) out.push({ ic:'layers', tone:'info', body:`Largest exposure: <b>${big.sym}</b> — <b>$${fmtCompact(big.size)}</b> notional (${big.lev}× ${big.dir}).`, t:'live' });
+    return out;
   };
+  const insightsData = isLive ? liveInsights() : AI_INSIGHTS;
+  const insights = insightsData.map(i => { const [bg, fg] = toneMap[i.tone] || toneMap.info; return `<div class="insight"><div class="insight-ic" style="background:${bg};color:${fg}">${IC[i.ic]}</div><div><p>${i.body}</p><div class="t">${i.t}</div></div></div>`; }).join('');
+
+  const liveActions = () => {
+    const out = [];
+    [...POSITIONS].filter(p=>p.risk>=55).sort((a,b)=>b.risk-a.risk).slice(0,2).forEach(p =>
+      out.push({ ic:'gauge', title:`Reduce ${p.sym} risk`, desc:`Risk ${p.risk} · ${(Math.abs(p.mark-p.liq)/p.mark*100).toFixed(1)}% to liq — trim or lower leverage`, impact:`−${Math.min(30, Math.max(5, p.risk-30))}`, unit:'risk' }));
+    const payer = [...POSITIONS].filter(p=>p.funding<0).sort((a,b)=>a.funding-b.funding)[0];
+    if (payer) out.push({ ic:'clock', title:`Watch ${payer.sym} funding`, desc:`Paying ${fmtSigned(payer.funding,0)} — reassess before next settlement`, impact:fmtSigned(payer.funding,0), unit:'carry' });
+    const w = [...POSITIONS].sort((a,b)=>b.pnl-a.pnl)[0];
+    if (w && w.pnl > 0) out.push({ ic:'pnl', title:`Take partial profit on ${w.sym}`, desc:`Locks ${fmtSigned(w.pnl*0.25,0)} of open gains`, impact:`+${fmtCompact(w.pnl*0.25)}`, unit:'realized' });
+    return out.slice(0,4);
+  };
+  const actionsData = isLive ? liveActions() : SUGGESTED_ACTIONS;
+  const actions = actionsData.map(a => `<div class="action-row"><div class="action-ic">${IC[a.ic]}</div><div><div class="a-title">${a.title}</div><div class="a-desc">${a.desc}</div></div><div class="impact"><div class="imp-val" style="color:${String(a.impact).startsWith('-')||String(a.impact).startsWith('−')?'var(--neg)':'var(--pos)'}">${a.impact}</div><div class="imp-lbl">${a.unit}</div></div></div>`).join('');
+
+  const payers = POSITIONS.filter(p=>p.funding<0);
+  const liveAnswers = () => ({
+    'risk': topRisk.sym ? `Your highest-risk position is <b>${topRisk.sym}</b> ${topRisk.dir} (score <b>${topRisk.risk}</b>, ${topDist.toFixed(1)}% to liquidation). ${topRisk.risk<40?'Overall the book is <b>low-risk</b> — leverage is modest and liquidation buffers are wide.':'Reducing it would lower portfolio risk most.'}` : 'No open positions to assess.',
+    'funding': `You've accrued <b>${fmtSigned(fundingSum,0)}</b> in funding since open. ${payers.length?`You currently pay on ${payers.length} position(s), largest being <b>${[...payers].sort((a,b)=>a.funding-b.funding)[0].sym}</b>.`:'Most positions are funding-neutral or earning.'}`,
+    'closest': nearest.sym ? `Closest to liquidation is <b>${nearest.sym}</b> — <b>${nearestDist.toFixed(1)}%</b> away at ${fmtNum(nearest.liq, nearest.liq<10?4:2)}. ${nearestDist>20?'Nothing is dangerously close.':'Worth watching.'}` : '—',
+    'liquid': nearest.sym ? `Closest to liquidation is <b>${nearest.sym}</b> at <b>${nearestDist.toFixed(1)}%</b>.` : '—',
+    '__default': `Ask about your risk, funding cost, or which position is closest to liquidation — grounded in your <b>${POSITIONS.length}</b> live Hyperliquid positions.`
+  });
+  const cannedAnswers = {
+    'risk': 'Your portfolio risk rose <b>54 → 62</b> today. <b>78%</b> comes from your <b>SOL</b> long: realized volatility jumped to 84% and price is now <b>4.9%</b> from liquidation. Reducing SOL leverage 12×→6× would bring the portfolio back to <b>~48</b>.',
+    'funding': 'You are <b>net paying</b> funding today — about <b>−$84</b>. The biggest drains are SOL and ETH, both crowded longs. Your ARB & DOGE shorts <b>earn</b> funding, offsetting ~$18.',
+    'closest': 'Your nearest liquidation is <b>SOL at $151.20</b> — 4.9% away. AVAX is next at 5.4%.',
+    '__default': 'I can explain your risk, funding, liquidation distances, or any position.'
+  };
+  const dashAnswers = isLive ? liveAnswers() : cannedAnswers;
 
   const askPanel = `<div class="ai-panel mb-22">
-    <div class="ai-head"><div class="ai-orb">${IC.chat}</div><div><h3>Ask PerpPilot</h3><div class="sub">Grounded in your live positions — ask anything about your book</div></div></div>
+    <div class="ai-head"><div class="ai-orb">${IC.chat}</div><div><h3>Ask PerpPilot</h3><div class="sub">${isLive?'Grounded in your real on-chain positions':'Grounded in your live positions — ask anything about your book'}</div></div></div>
     <div class="card-pad">${askAI('dash', 'Why is my risk increasing?', ['Why is my risk increasing?','What am I paying in funding?','Closest to liquidation?'], dashAnswers)}</div>
   </div>`;
 
   const insightsPanel = `<div class="ai-panel">
-    <div class="ai-head"><div class="ai-orb">${IC.sparkles}</div><div><h3>Today's AI Insights</h3><div class="sub">4 signals · updated 12m ago</div></div></div>
+    <div class="ai-head"><div class="ai-orb">${IC.sparkles}</div><div><h3>${isLive?'Live AI Insights':"Today's AI Insights"}</h3><div class="sub">${insightsData.length} signals${isLive?' · from your positions':' · updated 12m ago'}</div></div></div>
     ${insights}
   </div>`;
 
   const actionsCard = `<div class="card">
-    <div class="card-head"><h3>${IC.wand} Suggested Actions</h3><span class="sub">Ranked by impact</span></div>
+    <div class="card-head"><h3>${IC.wand} Suggested Actions</h3><span class="sub">${isLive?'from your book':'Ranked by impact'}</span></div>
     <div class="card-pad">${actions}
-      <div class="explain" style="margin-top:4px"><div class="ai-orb">${IC.sparkles}</div><p>Applying the top two actions lowers <b>portfolio risk 62 → 38</b> and reduces daily funding drag by <b>~$140</b>.</p></div>
+      <div class="explain" style="margin-top:4px"><div class="ai-orb">${IC.sparkles}</div><p>${isLive?`Your book carries <b>${fmtSigned(fundingSum,0)}</b> funding and <b>${attention.length}</b> position(s) above the risk threshold.`:`Applying the top two actions lowers <b>portfolio risk 62 → 38</b> and reduces daily funding drag by <b>~$140</b>.`}</p></div>
     </div>
   </div>`;
 
-  const decisionCard = `<div class="card">
+  const recentActivityCard = () => {
+    const rows = LIVE_FILLS.slice(0, 6).map(f => {
+      const pnl = +(f.closedPnl || 0);
+      return `<div class="dh-item"><div class="dh-day">${timeAgo(f.time)}</div><div class="dh-body"><div class="dh-rec">${f.dir} <b>${f.coin}</b></div>
+        <div class="dh-flow"><span class="mono">${fmtNum(+f.sz, +f.sz<1?4:2)} @ ${fmtNum(+f.px, +f.px<10?4:2)}</span>${pnl!==0?` <span class="dh-tag" style="background:${pnl>=0?'var(--pos-soft)':'var(--neg-soft)'};color:${pnl>=0?'var(--pos)':'var(--neg)'}">${fmtSigned(pnl,0)}</span>`:''}</div></div></div>`;
+    }).join('');
+    const realized = LIVE_FILLS.reduce((s,f)=>s+(+(f.closedPnl||0)),0);
+    return `<div class="card"><div class="card-head"><h3>${IC.history} Recent Activity</h3><span class="sub">live · on-chain fills</span></div>
+      <div class="card-pad">${rows || '<p class="muted">No recent fills.</p>'}
+        <div class="explain" style="margin-top:8px"><div class="ai-orb">${IC.sparkles}</div><p>Realized PnL across <b>${LIVE_FILLS.length}</b> recorded fills: <b class="${realized>=0?'pos':'neg'}">${fmtSigned(realized,0)}</b>.</p></div>
+      </div></div>`;
+  };
+  const decisionCard = isLive ? recentActivityCard() : `<div class="card">
     <div class="card-head"><h3>${IC.history} Decision History</h3><span class="sub">AI recall</span></div>
     <div class="card-pad">${decisionHistory([
       { day:'Today', rec:'Reduce SOL leverage 12× → 6×', action:'Suggested', followed:'Pending', result:'Open', outcomeTone:'warn' },
@@ -1361,6 +1399,127 @@ SCREENS.learn = (view) => {
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); $('#cmdk input').focus(); }
 });
+
+/* ============================================================
+   FUNDING ARB — cross-venue funding (real: HL · Binance · Bybit · dYdX)
+   ============================================================ */
+SCREENS.arb = (view) => {
+  const coins = ['BTC','ETH','SOL','BNB','XRP','DOGE','AVAX','LINK','ARB','OP','SUI','TIA'];
+  view.innerHTML = `<div class="wrap-head">
+    <div><h2>Cross-Venue Funding Arb</h2><p>Real funding across four venues — find delta-neutral carry: long where funding is cheapest, short where it's richest.</p></div>
+    <button class="btn btn-soft btn-sm" id="arbRefresh">${IC.activity} Refresh</button></div>
+    <div id="arbOut"><div class="card card-pad" style="text-align:center;color:var(--text-lo)">${IC.sparkles} Fetching live funding from Hyperliquid, Binance, Bybit &amp; dYdX…</div></div>
+    <div class="mt-16">${pmInsight({ problem:'Funding differs across venues, but traders only see the one they trade on — leaving free carry on the table.', hypothesis:'Surfacing the cross-venue funding spread turns an invisible arb into a one-glance, delta-neutral yield idea.', metric:'funding-arb capture', metricVal:'+annualized' })}</div>`;
+
+  const venues = [['hl','Hyperliquid'],['binance','Binance'],['bybit','Bybit'],['dydx','dYdX']];
+  const fmtApr = (v) => v==null ? '<span style="color:var(--text-faint)">—</span>' : `<span style="color:${v>=0?'var(--pos)':'var(--neg)'}">${v>=0?'+':''}${v.toFixed(1)}%</span>`;
+
+  async function load() {
+    try {
+      const rows = await fetchFundingBoard(coins);
+      // compute arb spread per coin
+      const withArb = rows.map(r => {
+        const vals = venues.map(([k])=>({k, v:r[k]})).filter(x=>x.v!=null);
+        if (vals.length < 2) return { ...r, spread:null };
+        const hi = vals.reduce((a,b)=>b.v>a.v?b:a), lo = vals.reduce((a,b)=>b.v<a.v?b:a);
+        return { ...r, spread:+(hi.v-lo.v).toFixed(1), longVenue:lo.k, shortVenue:hi.k };
+      }).sort((a,b)=>(b.spread||-1)-(a.spread||-1));
+
+      const top = withArb.filter(r=>r.spread!=null).slice(0,3);
+      const vname = (k)=>venues.find(v=>v[0]===k)[1];
+
+      const tableRows = withArb.map(r => `<tr>
+        <td><div class="asset-cell"><div class="coin ${coinClass(r.coin)}">${r.coin.slice(0,3)}</div><div class="a-sym">${r.coin}</div></div></td>
+        <td class="mono">${fmtApr(r.hl)}</td><td class="mono">${fmtApr(r.binance)}</td><td class="mono">${fmtApr(r.bybit)}</td><td class="mono">${fmtApr(r.dydx)}</td>
+        <td class="mono" style="font-weight:650">${r.spread!=null?`<span style="color:var(--accent)">${r.spread.toFixed(1)}%</span>`:'—'}</td>
+      </tr>`).join('');
+
+      $('#arbOut').innerHTML = `
+        <div class="grid-3 mb-22">${top.map(r=>`<div class="ai-panel"><div class="card-pad">
+          <div class="flex between" style="margin-bottom:8px"><div class="coin ${coinClass(r.coin)}">${r.coin.slice(0,3)}</div><span class="badge badge-accent">${r.spread.toFixed(1)}% APR</span></div>
+          <div style="font-size:13px;color:var(--text-mid);line-height:1.5"><span class="pill-long">${IC.arrowUp}Long</span> on <b>${vname(r.longVenue)}</b> · <span class="pill-short">${IC.arrowDown}Short</span> on <b>${vname(r.shortVenue)}</b></div>
+          <div class="muted" style="font-size:11.5px;margin-top:8px">Delta-neutral ${r.coin} — collect the funding spread while price nets to zero.</div>
+        </div></div>`).join('')}</div>
+        <div class="card"><div class="card-head"><h3>${IC.scale} Funding by Venue <span class="sub">annualized APR · live</span></h3>
+          <div class="chips"><span class="live-pill live-on"><span class="live-dot" style="background:var(--pos)"></span> LIVE</span></div></div>
+          <div class="table-wrap"><table class="grid">
+            <thead><tr><th>Asset</th><th>Hyperliquid</th><th>Binance</th><th>Bybit</th><th>dYdX</th><th>Max spread</th></tr></thead>
+            <tbody>${tableRows}</tbody></table></div>
+          <div class="card-pad"><div class="explain"><div class="ai-orb">${IC.sparkles}</div><p><b>How to read it:</b> a positive rate means <b>longs pay shorts</b> — so you <b>receive</b> by shorting that venue. The best delta-neutral carry is <b>long the lowest-funding venue, short the highest</b>. Right now the widest is <b>${top[0]?.coin}</b> at <b>${top[0]?.spread.toFixed(1)}% APR</b>. Real carry after fees/slippage will be lower — this is the gross opportunity.</p></div></div>
+        </div>`;
+    } catch (e) {
+      $('#arbOut').innerHTML = `<div class="card card-pad" style="text-align:center;color:var(--neg)">${IC.alert} Couldn't load venue funding — ${e.message}. <button class="btn btn-soft btn-sm" onclick="go('arb')" style="margin-left:8px">Retry</button></div>`;
+    }
+  }
+  $('#arbRefresh').addEventListener('click', load);
+  load();
+};
+
+/* ============================================================
+   POINTS LAB — trader activity & airdrop-readiness (real fills)
+   ============================================================ */
+SCREENS.points = (view) => {
+  const isLive = !!(typeof CONNECTED_ADDR !== 'undefined' && CONNECTED_ADDR);
+  const a = isLive ? activityFromFills(LIVE_FILLS, POSITIONS) : { vol30: 4820000, trades: 214, makerPct: 38, realizedPnl: 12840, feesPaid: -1420, oiHeld: 407200 };
+  // illustrative points model (rewards volume, maker depth, OI held over time)
+  const volScore = Math.min(50, a.vol30 / 200000);
+  const makerScore = a.makerPct / 100 * 20;
+  const oiScore = Math.min(20, a.oiHeld / 50000);
+  const consistencyScore = Math.min(10, a.trades / 30);
+  const score = Math.round(volScore + makerScore + oiScore + consistencyScore);
+  const estPoints = Math.round(a.vol30 / 1000 * (1 + a.makerPct / 100) + a.oiHeld / 100);
+  const tier = score >= 80 ? ['Diamond','var(--accent)'] : score >= 60 ? ['Platinum','var(--info)'] : score >= 40 ? ['Gold','var(--warn)'] : ['Silver','var(--text-lo)'];
+
+  const bar = (v, max, col) => `<div class="riskbar" style="width:100%;height:7px"><i style="width:${Math.min(100,v/max*100)}%;background:${col}"></i></div>`;
+  const suggestions = [
+    a.makerPct < 50 ? { t:'Post more maker orders', d:`You're ${a.makerPct}% maker. Passive fills earn rebates and typically score higher.`, gain:'+12 pts' } : { t:'Maintain maker share', d:`${a.makerPct}% maker is strong — keep providing resting liquidity.`, gain:'held' },
+    { t:'Hold open interest longer', d:'Sustained OI is rewarded more than churn — avoid over-trading the same size.', gain:'+8 pts' },
+    { t:'Spread volume across more markets', d:'Activity in more assets diversifies your footprint and reduces wash-flag risk.', gain:'+6 pts' },
+    { t:'Refer retained traders', d:'Referrals that keep trading compound your points far more than one-off signups.', gain:'+var' },
+  ];
+
+  view.innerHTML = `<div class="wrap-head">
+    <div><h2>Points Lab</h2><p>Your on-chain trading footprint, scored for airdrop-readiness — and how to improve it.</p></div>
+    <span class="live-pill ${isLive?'live-on':'demo'}">${isLive?`<span class="live-dot" style="background:var(--pos)"></span> LIVE`:'DEMO'}</span></div>
+  ${!isLive?`<div class="explain mb-22"><div class="ai-orb">${IC.wallet}</div><p>These are sample numbers. <b onclick="openConnect()" style="color:var(--accent);cursor:pointer;text-decoration:underline">Connect a wallet</b> to score your real Hyperliquid activity.</p></div>`:''}
+  <div class="with-rail"><div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr)">
+      ${kpiCard({label:'30-day Volume', ic:'activity', val:'$'+fmtCompact(a.vol30), delta:`${a.trades} fills`, deltaTone:'muted'})}
+      ${kpiCard({label:'Maker Share', ic:'scale', val:a.makerPct+'%', delta:a.makerPct>=50?'liquidity provider':'mostly taker', deltaTone:a.makerPct>=50?'pos':'muted'})}
+      ${kpiCard({label:'Open Interest Held', ic:'layers', val:'$'+fmtCompact(a.oiHeld), delta:'committed exposure', deltaTone:'muted'})}
+      ${kpiCard({label:'Realized PnL', ic:'pnl', val:fmtSigned(a.realizedPnl,0), delta:`fees ${fmtSigned(a.feesPaid,0)}`, deltaTone:'muted'})}
+    </div>
+    <div class="card mt-16"><div class="card-head"><h3>${IC.gauge} Score Breakdown</h3><span class="sub">weighted footprint</span></div><div class="card-pad">
+      ${[['Volume', volScore, 50, 'var(--accent)'],['Maker depth', makerScore, 20, 'var(--info)'],['OI held', oiScore, 20, 'var(--pos)'],['Consistency', consistencyScore, 10, 'var(--warn)']].map(([k,v,m,c])=>`
+        <div class="dl-row"><span class="k" style="width:110px">${k}</span><div style="flex:1;margin:0 14px">${bar(v,m,c)}</div><span class="v mono" style="width:60px;text-align:right">${Math.round(v)}/${m}</span></div>`).join('')}
+    </div></div>
+  </div>
+    <div class="rail" style="display:flex;flex-direction:column;gap:16px">
+      <div class="ai-panel"><div class="card-pad" style="text-align:center">
+        ${riskDonutScore(score)}
+        <div style="font-size:12.5px;color:var(--text-mid);margin-top:12px">Airdrop-readiness · <b style="color:${tier[1]}">${tier[0]}</b> tier</div>
+        <div class="divider"></div>
+        <div class="flex between"><span class="muted" style="font-size:12px">Est. points</span><span class="mono" style="font-weight:650;color:var(--accent)">${estPoints.toLocaleString()}</span></div>
+        <div class="muted" style="font-size:10.5px;margin-top:6px;font-style:italic">Illustrative — no venue publishes an official points formula.</div>
+      </div></div>
+      <div class="card"><div class="card-head"><h3>${IC.wand} How to climb</h3></div><div class="card-pad">
+        ${suggestions.map(s=>`<div class="action-row"><div class="action-ic">${IC.trend}</div><div><div class="a-title">${s.t}</div><div class="a-desc">${s.d}</div></div><div class="impact"><div class="imp-val">${s.gain}</div><div class="imp-lbl">score</div></div></div>`).join('')}
+      </div></div>
+    </div>
+  </div>
+  <div class="mt-16">${pmInsight({ problem:'Points-driven users obsess over airdrops but fly blind on what actually earns them.', hypothesis:'Scoring real on-chain activity + concrete "how to climb" steps turns a guessing game into a retention loop.', metric:'points-qualified retention', metricVal:'+2.6×' })}</div>`;
+};
+
+/* a "higher = better" donut for the points score */
+function riskDonutScore(score, size = 118) {
+  const r = size/2 - 8, c = 2*Math.PI*r, off = c*(1-score/100);
+  const col = score>=67?'var(--pos)':score>=40?'var(--warn)':'var(--neg)';
+  return `<div class="ring-wrap" style="width:${size}px;height:${size}px;margin:0 auto"><svg width="${size}" height="${size}" style="transform:rotate(-90deg)">
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="var(--bg-elevated)" stroke-width="7"/>
+    <circle cx="${size/2}" cy="${size/2}" r="${r}" fill="none" stroke="${col}" stroke-width="7" stroke-linecap="round" stroke-dasharray="${c}" stroke-dashoffset="${off}"/></svg>
+    <div class="ring-label"><div style="font-family:var(--font-mono);font-size:${size*0.28}px;font-weight:680;color:${col}">${score}</div>
+    <div style="font-size:9px;color:var(--text-lo);text-transform:uppercase;letter-spacing:0.05em;font-weight:600">Points score</div></div></div>`;
+}
 
 /* ---------- launch ---------- */
 window.go = go;

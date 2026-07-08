@@ -145,10 +145,12 @@ const coinClass = (s) => COIN_CLASS[s] || 'coin-generic';
 async function fetchHL(address) {
   const post = (body) => fetch(HL_API, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) })
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
-  const [state, metaCtx] = await Promise.all([
+  const [state, metaCtx, fills] = await Promise.all([
     post({ type:'clearinghouseState', user: address }),
     post({ type:'metaAndAssetCtxs' }),
+    post({ type:'userFills', user: address }).catch(() => []),
   ]);
+  const fillsArr = Array.isArray(fills) ? fills : [];
   const meta = metaCtx[0], ctxs = metaCtx[1], ctxByCoin = {};
   meta.universe.forEach((u, i) => { ctxByCoin[u.name] = ctxs[i]; });
 
@@ -199,7 +201,46 @@ async function fetchHL(address) {
     longRatio: DEMO_MARKET.longRatio, shortRatio: DEMO_MARKET.shortRatio,
     nextFundingMin: 60 - new Date().getUTCMinutes(),
   };
-  return { positions, portfolio, market, accountValue };
+  return { positions, portfolio, market, accountValue, fills: fillsArr };
+}
+
+/* ---------- Cross-venue funding board (real, multi-DEX) ---------- */
+async function fetchFundingBoard(coins) {
+  const get = (url, opt) => fetch(url, opt).then(r => r.ok ? r.json() : null).catch(() => null);
+  const [hlMeta, binAll, byAll, dyAll] = await Promise.all([
+    get(HL_API, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ type:'metaAndAssetCtxs' }) }),
+    get('https://fapi.binance.com/fapi/v1/premiumIndex'),
+    get('https://api.bybit.com/v5/market/tickers?category=linear'),
+    get('https://indexer.dydx.trade/v4/perpetualMarkets'),
+  ]);
+  const hl = {}, bin = {}, by = {}, dy = {};
+  if (hlMeta) hlMeta[0].universe.forEach((u, i) => { hl[u.name] = +(hlMeta[1][i]?.funding || 0); });        // hourly
+  if (Array.isArray(binAll)) binAll.forEach(x => { if (x.symbol.endsWith('USDT')) bin[x.symbol.slice(0,-4)] = +x.lastFundingRate; }); // 8h
+  const byMap = {}; if (byAll?.result?.list) byAll.result.list.forEach(x => { if (x.symbol.endsWith('USDT') && x.fundingRate !== '') byMap[x.symbol.slice(0,-4)] = +x.fundingRate; });
+  if (dyAll?.markets) Object.values(dyAll.markets).forEach(m => { const c = m.ticker.replace('-USD',''); if (m.nextFundingRate != null) dy[c] = +m.nextFundingRate; }); // 1h
+  // annualized APR %
+  const apr = { hl: 24*365*100, binance: 3*365*100, bybit: 3*365*100, dydx: 24*365*100 };
+  return coins.map(c => ({
+    coin: c,
+    hl:      hl[c]    != null ? +(hl[c]    * apr.hl).toFixed(2)      : null,
+    binance: bin[c]   != null ? +(bin[c]   * apr.binance).toFixed(2) : null,
+    bybit:   byMap[c] != null ? +(byMap[c] * apr.bybit).toFixed(2)   : null,
+    dydx:    dy[c]    != null ? +(dy[c]    * apr.dydx).toFixed(2)     : null,
+  }));
+}
+
+/* ---------- Activity / points metrics from real fills ---------- */
+function activityFromFills(fills, positions) {
+  const now = Date.now(), day30 = now - 30*864e5;
+  const recent = (fills || []).filter(f => f.time >= day30);
+  const vol30 = recent.reduce((s, f) => s + Math.abs((+f.px) * (+f.sz)), 0);
+  const trades = recent.length;
+  const maker = recent.filter(f => f.crossed === false).length;
+  const makerPct = trades ? Math.round(maker / trades * 100) : 0;
+  const realizedPnl = (fills || []).reduce((s, f) => s + (+(f.closedPnl || 0)), 0);
+  const feesPaid = (fills || []).reduce((s, f) => s + (+(f.fee || 0)), 0);
+  const oiHeld = (positions || []).reduce((s, p) => s + p.size, 0);
+  return { vol30, trades, makerPct, realizedPnl, feesPaid, oiHeld };
 }
 
 const AI_INSIGHTS = [
